@@ -20,7 +20,7 @@ def test_long_inventory_pushes_reservation_down(default_params, healthy_snapshot
     assert result["inv_skew"] < 0
 
 
-def test_thick_bid_pulls_micro_price_down_factor_skew_negative(default_params, healthy_snapshot):
+def test_thick_ask_pulls_micro_price_down_factor_skew_negative(default_params, healthy_snapshot):
     snap = healthy_snapshot
     snap.bid_qty = Decimal("1")
     snap.ask_qty = Decimal("9")

@@ -8,7 +8,6 @@ compute_processed_data, and writes the result back.
 
 from dataclasses import dataclass
 from decimal import Decimal
-from typing import Optional
 
 from controllers.market_making import factor_math, health
 
