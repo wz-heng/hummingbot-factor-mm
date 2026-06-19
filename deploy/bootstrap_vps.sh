@@ -73,8 +73,8 @@ ln -sf ~/factor-mm/controllers/market_making/processed_data.py \
 EOSU
 
 # 5. systemd units
-cp deploy/hummingbot.service /etc/systemd/system/
-cp deploy/factor-dashboard.service /etc/systemd/system/
+cp /home/botuser/factor-mm/deploy/hummingbot.service /etc/systemd/system/
+cp /home/botuser/factor-mm/deploy/factor-dashboard.service /etc/systemd/system/
 systemctl daemon-reload
 systemctl enable hummingbot factor-dashboard
 

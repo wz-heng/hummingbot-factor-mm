@@ -28,6 +28,7 @@ from controllers.market_making.processed_data import (
     MarketSnapshot,
     compute_processed_data,
 )
+from controllers.market_making import factor_math
 
 
 # Where to write factor_metrics.sqlite (relative to Hummingbot working dir, i.e., /home/botuser/hummingbot)
@@ -86,9 +87,9 @@ class FactorMMBtcPerp(MarketMakingControllerBase):
             "spread_multiplier": result["spread_multiplier"],
         }
 
-        # 1 Hz metrics downsampling
+        # 1 Hz metrics downsampling (skip if halted to avoid confusing dashboard)
         now = time.time()
-        if now - self._last_metrics_emit >= 1.0:
+        if result["halt_reason"] is None and now - self._last_metrics_emit >= 1.0:
             self._emit_metrics(snap, params, result, now)
             self._last_metrics_emit = now
 
@@ -122,10 +123,15 @@ class FactorMMBtcPerp(MarketMakingControllerBase):
         ob = self.market_data_provider.get_order_book(
             self.config.connector_name, self.config.trading_pair
         )
-        bid_px = Decimal(str(ob.bids[0].price))
-        bid_qty = Decimal(str(ob.bids[0].amount))
-        ask_px = Decimal(str(ob.asks[0].price))
-        ask_qty = Decimal(str(ob.asks[0].amount))
+        # Guard against empty bids/asks (testnet reconnect resilience)
+        if not ob.bids or not ob.asks:
+            bid_px = ask_px = Decimal("0")
+            bid_qty = ask_qty = Decimal("0")
+        else:
+            bid_px = Decimal(str(ob.bids[0].price))
+            bid_qty = Decimal(str(ob.bids[0].amount))
+            ask_px = Decimal(str(ob.asks[0].price))
+            ask_qty = Decimal(str(ob.asks[0].amount))
 
         now = time.time()
         snapshot_ts = getattr(ob, "snapshot_uid_time", now)  # best-effort; verify at M4
@@ -162,13 +168,8 @@ class FactorMMBtcPerp(MarketMakingControllerBase):
         return Decimal("0")
 
     def _emit_metrics(self, snap, params, result, now: float) -> None:
-        mid = (snap.bid_px + snap.ask_px) / 2 if (snap.bid_qty + snap.ask_qty) else Decimal("0")
-        mp = (
-            (snap.bid_px * snap.ask_qty + snap.ask_px * snap.bid_qty)
-            / (snap.bid_qty + snap.ask_qty)
-            if (snap.bid_qty + snap.ask_qty)
-            else Decimal("0")
-        )
+        mid = (snap.bid_px + snap.ask_px) / 2
+        mp = factor_math.micro_price(snap.bid_px, snap.bid_qty, snap.ask_px, snap.ask_qty)
         snapshot = {
             "ts_ms": int(now * 1000),
             "mid": float(mid),

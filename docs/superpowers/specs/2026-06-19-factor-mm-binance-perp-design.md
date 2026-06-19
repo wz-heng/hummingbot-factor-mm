@@ -449,6 +449,8 @@ def executors_to_early_stop(self):
 | `inventory_soft_cap` | 0.01 BTC | L2 触发点 |
 | `inventory_hard_cap` | 0.02 BTC | L3 触发点;**= testnet 上 1 个标准合约单位级别** |
 
+> 注:数值单位是"bp of mid 每单位 base 偏离 × 10000"。`penalty_bps=300` 在 soft_cap (0.01 BTC) 偏离时产生约 3 bp 的报价偏移(`-0.01 * 300 * mid / 10000`)。spec §4.2 默认值 300 与此一致。
+
 ---
 
 ## 6. 风控
