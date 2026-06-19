@@ -29,6 +29,12 @@ from controllers.market_making.processed_data import (
     compute_processed_data,
 )
 from controllers.market_making import factor_math
+from controllers.market_making.exchange_time import (
+    BINANCE_FUTURES_MAINNET_TIME_URL,
+    BINANCE_FUTURES_TESTNET_TIME_URL,
+    estimate_exchange_time_sec,
+    fetch_binance_futures_server_time_sec,
+)
 
 
 # Where to write factor_metrics.sqlite (relative to Hummingbot working dir, i.e., /home/botuser/hummingbot)
@@ -65,6 +71,15 @@ class FactorMMBtcPerp(MarketMakingControllerBase):
         self._action_log: list[float] = []           # V2: rate limit enforcement; never appended to in V1
         self._kill_switch_engaged: bool = False
         self._last_metrics_emit: float = 0.0
+        # Exchange server-time cache: (local_at_fetch_sec, server_at_fetch_sec).
+        # (0.0, 0.0) means "never fetched"; refreshed at most once per
+        # max_clock_drift_sec window (default 300s).
+        self._exch_time_cache: tuple[float, float] = (0.0, 0.0)
+        self._exch_time_url = (
+            BINANCE_FUTURES_TESTNET_TIME_URL
+            if config.connector_name.endswith("_testnet")
+            else BINANCE_FUTURES_MAINNET_TIME_URL
+        )
 
     # ------------------------------------------------------------------
     async def update_processed_data(self) -> None:
@@ -136,6 +151,12 @@ class FactorMMBtcPerp(MarketMakingControllerBase):
         now = time.time()
         snapshot_ts = getattr(ob, "snapshot_uid_time", now)  # best-effort; verify at M4
 
+        exchange_ts, self._exch_time_cache = estimate_exchange_time_sec(
+            cache=self._exch_time_cache,
+            now_sec=now,
+            fetcher=lambda: fetch_binance_futures_server_time_sec(self._exch_time_url),
+        )
+
         return MarketSnapshot(
             bid_px=bid_px,
             bid_qty=bid_qty,
@@ -146,7 +167,7 @@ class FactorMMBtcPerp(MarketMakingControllerBase):
             snapshot_ts_sec=float(snapshot_ts),
             now_sec=now,
             local_ts_sec=now,
-            exchange_ts_sec=now,  # TODO M4: wire real exchange server time
+            exchange_ts_sec=exchange_ts,
         )
 
     def _build_params(self) -> FactorParams:
