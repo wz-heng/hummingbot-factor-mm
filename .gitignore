@@ -1,0 +1,37 @@
+# Secrets — 绝对不入 git
+conf/connectors/
+*.secret
+*.key
+
+# 运行时数据
+data/
+*.sqlite
+*.sqlite-journal
+logs/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# 虚拟环境
+.venv/
+venv/
+env/
+
+# IDE / OS
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# 构建产物
+build/
+dist/
+*.so
