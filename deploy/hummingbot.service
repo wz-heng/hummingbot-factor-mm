@@ -1,0 +1,17 @@
+[Unit]
+Description=Hummingbot factor MM (BTC perp testnet)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=botuser
+WorkingDirectory=/home/botuser/hummingbot
+ExecStart=/home/botuser/miniconda3/envs/hummingbot/bin/python bin/hummingbot_quickstart.py -f conf/controllers/factor_mm_btc.yml
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

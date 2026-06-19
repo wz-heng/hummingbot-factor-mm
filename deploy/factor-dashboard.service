@@ -1,0 +1,16 @@
+[Unit]
+Description=Factor MM dashboard (Streamlit)
+After=network-online.target
+
+[Service]
+Type=simple
+User=botuser
+WorkingDirectory=/home/botuser/factor-mm
+ExecStart=/home/botuser/miniconda3/envs/hummingbot/bin/streamlit run dashboard/app.py --server.address=127.0.0.1 --server.port=8501 --server.headless=true
+Restart=on-failure
+RestartSec=5
+Environment=METRICS_DB=/home/botuser/hummingbot/data/factor_metrics.sqlite
+Environment=TRADES_DB=/home/botuser/hummingbot/data/trades.sqlite
+
+[Install]
+WantedBy=multi-user.target
