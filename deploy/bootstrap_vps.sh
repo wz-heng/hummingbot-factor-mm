@@ -54,22 +54,20 @@ fi
 EOSU
 
 # 4. Our project repo + symlinks
+# Symlinks loop over all *.py except __init__.py so newly added modules
+# (e.g. exchange_time.py added 2026-06-19) auto-pick-up without script edits.
+# __init__.py is skipped — Hummingbot's own package init must not be overwritten.
 sudo -u botuser bash <<EOSU
 set -euo pipefail
 cd ~
 if [ ! -d factor-mm ]; then
   git clone "${REPO_URL}" factor-mm
 fi
-ln -sf ~/factor-mm/controllers/market_making/factor_mm_btc_perp.py \
-       ~/hummingbot/controllers/market_making/factor_mm_btc_perp.py
-ln -sf ~/factor-mm/controllers/market_making/factor_math.py \
-       ~/hummingbot/controllers/market_making/factor_math.py
-ln -sf ~/factor-mm/controllers/market_making/health.py \
-       ~/hummingbot/controllers/market_making/health.py
-ln -sf ~/factor-mm/controllers/market_making/metrics_sink.py \
-       ~/hummingbot/controllers/market_making/metrics_sink.py
-ln -sf ~/factor-mm/controllers/market_making/processed_data.py \
-       ~/hummingbot/controllers/market_making/processed_data.py
+for f in ~/factor-mm/controllers/market_making/*.py; do
+  base=\$(basename "\$f")
+  [ "\$base" = "__init__.py" ] && continue
+  ln -sf "\$f" ~/hummingbot/controllers/market_making/"\$base"
+done
 EOSU
 
 # 5. systemd units
