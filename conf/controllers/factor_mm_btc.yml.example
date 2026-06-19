@@ -1,0 +1,42 @@
+# Factor MM BTC perpetual — Hummingbot v2 controller config
+#
+# Copy this file to factor_mm_btc.yml (which is gitignored) and edit the
+# numbers if you need to. The defaults match the spec §6.6 risk table.
+
+controller_name: factor_mm_btc_perp
+controller_type: market_making
+manual_kill_switch: false
+
+# Connector + market
+connector_name: binance_perpetual_testnet
+trading_pair: BTC-USDT
+leverage: 5
+position_mode: ONEWAY
+total_amount_quote: 200       # USDT notional total
+
+# Quoting (base class)
+buy_spreads:   [0.0005, 0.0010]    # 5 bp, 10 bp
+sell_spreads:  [0.0005, 0.0010]
+buy_amounts_pct:  [0.5, 0.5]
+sell_amounts_pct: [0.5, 0.5]
+executor_refresh_time: 60
+cooldown_time: 15
+
+# Per-position risk (TripleBarrier)
+stop_loss:   0.005
+take_profit: 0.003
+time_limit:  300
+
+# Factor + inventory (our additions)
+obi_weight:             0.5
+factor_scale_bps:       2
+inventory_target:       0
+inventory_penalty_bps:  300
+inventory_soft_cap:     0.01
+inventory_hard_cap:     0.02
+
+# Global risk (our additions)
+daily_loss_limit_usdt:  50
+max_actions_per_minute: 30
+max_orderbook_age_sec:  2.0
+max_clock_drift_sec:    0.5
