@@ -9,7 +9,6 @@ processed_data.py and its dependencies.
 import time
 from decimal import Decimal
 from pathlib import Path
-from typing import List, Optional
 
 from pydantic import Field
 
@@ -62,7 +61,7 @@ class FactorMMBtcPerp(MarketMakingControllerBase):
         super().__init__(config, *args, **kwargs)
         self.config = config
         self._metrics = MetricsSink(_METRICS_DB_PATH)
-        self._action_log: list[float] = []
+        self._action_log: list[float] = []           # V2: rate limit enforcement; never appended to in V1
         self._kill_switch_engaged: bool = False
         self._last_metrics_emit: float = 0.0
 
@@ -146,6 +145,8 @@ class FactorMMBtcPerp(MarketMakingControllerBase):
 
     def _build_params(self) -> FactorParams:
         c = self.config
+        # V2: inventory_soft_cap and inventory_hard_cap from self.config will be
+        # plumbed into FactorParams here when L2/L3 tier logic ships.
         return FactorParams(
             obi_weight=c.obi_weight,
             factor_scale_bps=c.factor_scale_bps,
