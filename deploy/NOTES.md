@@ -99,3 +99,27 @@ public). Tailscale interface explicitly allowed via:
 `ufw allow in on tailscale0`
 
 Browser access: `http://<tailscale-ip>:8501` (Tailscale-only).
+
+### 11. Hummingbot writes fills to `<config_name>.sqlite`, not `trades.sqlite`
+
+The "Markets recorder" uses the controller / strategy file name as the
+sqlite filename. For our setup that's `factor_mm.sqlite` (from
+`conf/scripts/factor_mm.yml`'s file name minus extension), not the
+default `trades.sqlite`. Fixed `TRADES_DB` env in
+`deploy/factor-dashboard.service`.
+
+### 12. TradeFill schema columns and scaling differ from naive expectation
+
+Actual columns:
+`config_file_path, strategy, market, symbol, base_asset, quote_asset,
+timestamp, order_id, trade_type, order_type, price, amount, leverage,
+trade_fee (json), trade_fee_in_quote, exchange_trade_id, position`
+
+Notable:
+- Pair column is `symbol` (not `trading_pair`)
+- `price` and `amount` stored as BIGINT scaled ×1e6 — must divide for
+  display (e.g. price 63624100000 → 63624.10 USDT)
+- `timestamp` is unix ms
+- `position` is OPEN / CLOSE
+
+`dashboard/queries.py::load_recent_fills` updated accordingly.

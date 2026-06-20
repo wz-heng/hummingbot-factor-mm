@@ -37,24 +37,41 @@ def latest_snapshot(db_path: Union[str, Path]) -> Optional[dict]:
     return dict(row) if row else None
 
 
+_PRICE_AMOUNT_SCALE = 1_000_000  # Hummingbot TradeFill stores price/amount as int*1e6
+
+
 def load_recent_fills(
     db_path: Union[str, Path],
     limit: int = 50,
 ) -> pd.DataFrame:
-    """Load recent fills from Hummingbot's trades.sqlite.
+    """Load recent fills from Hummingbot's trades sqlite.
 
-    Hummingbot's trade table schema may evolve; tolerate missing tables.
+    Schema notes (Hummingbot master @ 2026-06-20):
+      - Table: `TradeFill`
+      - Pair column is `symbol` (not `trading_pair`); we alias for display.
+      - `price`, `amount` stored as BIGINT scaled by 1e6 → divide for display.
+      - `position` is OPEN / CLOSE; `order_type` is LIMIT / MARKET.
+
+    Tolerates missing table during early bring-up.
     """
     try:
         with sqlite3.connect(str(db_path)) as conn:
             df = pd.read_sql(
-                "SELECT timestamp, trading_pair, trade_type, price, amount "
+                "SELECT timestamp, symbol AS trading_pair, trade_type, order_type, "
+                "       position, price, amount "
                 "FROM TradeFill ORDER BY timestamp DESC LIMIT ?",
                 conn,
                 params=(limit,),
             )
+        if not df.empty:
+            df["price"] = df["price"] / _PRICE_AMOUNT_SCALE
+            df["amount"] = df["amount"] / _PRICE_AMOUNT_SCALE
+            df["time"] = pd.to_datetime(df["timestamp"], unit="ms")
+            df = df[["time", "trading_pair", "trade_type", "order_type",
+                     "position", "price", "amount"]]
         return df
     except (sqlite3.OperationalError, pd.io.sql.DatabaseError):
         return pd.DataFrame(
-            columns=["timestamp", "trading_pair", "trade_type", "price", "amount"]
+            columns=["time", "trading_pair", "trade_type", "order_type",
+                     "position", "price", "amount"]
         )

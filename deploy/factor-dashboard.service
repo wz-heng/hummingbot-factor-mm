@@ -10,7 +10,7 @@ ExecStart=/home/botuser/miniconda3/envs/hummingbot/bin/streamlit run dashboard/a
 Restart=on-failure
 RestartSec=5
 Environment=METRICS_DB=/home/botuser/hummingbot/data/factor_metrics.sqlite
-Environment=TRADES_DB=/home/botuser/hummingbot/data/trades.sqlite
+Environment=TRADES_DB=/home/botuser/hummingbot/data/factor_mm.sqlite
 Environment=PYTHONPATH=/home/botuser/factor-mm
 
 [Install]
