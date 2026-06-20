@@ -17,7 +17,13 @@ import plotly.graph_objects as go
 import streamlit as st
 from plotly.subplots import make_subplots
 
-from dashboard.queries import latest_snapshot, load_metrics, load_recent_fills
+from dashboard.queries import (
+    CLOSE_TYPE_LABELS,
+    latest_snapshot,
+    load_metrics,
+    load_pnl_summary,
+    load_recent_fills,
+)
 
 
 METRICS_DB = Path(os.environ.get("METRICS_DB", "data/factor_metrics.sqlite"))
@@ -40,7 +46,31 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# Big numbers
+# PnL row (from Hummingbot's Executors table)
+pnl = load_pnl_summary(TRADES_DB) if TRADES_DB.exists() else None
+pcols = st.columns(4)
+if pnl and pnl["n_executors"] > 0:
+    pcols[0].metric(
+        "Cumulative PnL (USDT)",
+        f"{pnl['total_pnl']:+.2f}",
+        delta=f"{pnl['total_pnl'] / max(pnl['total_notional'], 1) * 10000:+.1f} bp of notional",
+    )
+    pcols[1].metric(
+        "Today's PnL (USDT)",
+        f"{pnl['today_pnl']:+.2f}",
+        delta=f"{pnl['today_n']} executors closed",
+    )
+    pcols[2].metric("Cumulative Fees (USDT)", f"{pnl['total_fees']:.2f}")
+    pcols[3].metric(
+        "Executors (closed)",
+        f"{pnl['n_executors']}",
+        delta=f"notional {pnl['total_notional']/1000:.1f}k USDT",
+    )
+else:
+    for c in pcols:
+        c.metric("—", "no PnL data yet")
+
+# Market state row
 cols = st.columns(6)
 if snap:
     cols[0].metric("Mid", f"{snap['mid']:.2f}")
@@ -106,6 +136,22 @@ if not df.empty:
 else:
     st.info("No metrics yet. Waiting for the bot to write rows to "
             f"{METRICS_DB}.")
+
+# PnL breakdown by close_type
+if pnl and pnl["by_close_type"]:
+    st.subheader("PnL by close type")
+    pdf = pd.DataFrame(
+        [
+            {
+                "close_type": CLOSE_TYPE_LABELS.get(ct, f"?{ct}"),
+                "n": n,
+                "total_pnl": round(p, 4),
+                "avg_pnl": round(p / n, 5) if n else 0.0,
+            }
+            for (ct, n, p) in pnl["by_close_type"]
+        ]
+    )
+    st.dataframe(pdf, use_container_width=True, hide_index=True)
 
 # Row 4: recent fills
 fills = load_recent_fills(TRADES_DB, limit=50) if TRADES_DB.exists() else pd.DataFrame()
