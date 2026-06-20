@@ -138,15 +138,19 @@ class FactorMMBtcPerp(MarketMakingControllerBase):
         ob = self.market_data_provider.get_order_book(
             self.config.connector_name, self.config.trading_pair
         )
-        # Guard against empty bids/asks (testnet reconnect resilience)
-        if not ob.bids or not ob.asks:
+        # Hummingbot exposes the book via bid_entries() / ask_entries() iterators
+        # of OrderBookRow(price, amount, update_id). Take the first row of each.
+        try:
+            best_bid = next(iter(ob.bid_entries()))
+            best_ask = next(iter(ob.ask_entries()))
+            bid_px = Decimal(str(best_bid.price))
+            bid_qty = Decimal(str(best_bid.amount))
+            ask_px = Decimal(str(best_ask.price))
+            ask_qty = Decimal(str(best_ask.amount))
+        except StopIteration:
+            # Empty side(s); compute_processed_data will halt with empty_book
             bid_px = ask_px = Decimal("0")
             bid_qty = ask_qty = Decimal("0")
-        else:
-            bid_px = Decimal(str(ob.bids[0].price))
-            bid_qty = Decimal(str(ob.bids[0].amount))
-            ask_px = Decimal(str(ob.asks[0].price))
-            ask_qty = Decimal(str(ob.asks[0].amount))
 
         now = time.time()
         snapshot_ts = getattr(ob, "snapshot_uid_time", now)  # best-effort; verify at M4

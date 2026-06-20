@@ -1,50 +1,101 @@
-# Deploy notes — TODOs not yet folded into the scripts
+# Deploy notes — TODOs and field corrections discovered during M4 bring-up
 
-## bootstrap_vps.sh fixes pending after first VPS bring-up (2026-06-20)
+## Status (2026-06-20)
 
-### Issue 1 — Hummingbot `./install` fails on newer Miniconda
+M4 successfully reached: bot live on Binance USDT-M Futures Testnet via
+Vultr Tokyo 2C/2G; Streamlit dashboard reachable on Tailscale.
+Hummingbot version installed: master @ 2026-06-19.
 
-Newer Miniconda (2024+) ships **without** `conda-build`, which provides
-`conda develop`. Hummingbot's `./install` uses both `conda develop` and
-`pre-commit` and fails on:
+## Fixes folded into the repo on M4 day, ready for next bring-up
 
-```
-conda: error: argument COMMAND: invalid choice: 'develop' ...
-./install: line 68: pre-commit: command not found
-```
+### 1. Hummingbot install needs `conda-build` + `pre-commit` on newer Miniconda
 
-**Fix:** in step 3b, after `conda activate hummingbot` and before `./install`,
-inject:
+Newer Miniconda (2024+) ships **without** `conda-build`, so `conda develop`
+is missing; `pre-commit` is also not present. Hummingbot `./install` fails
+with both. The `deploy/_recovery.sh` script handles this:
 
 ```bash
 conda install -y conda-build
 pip install pre-commit
 ```
 
-### Issue 2 — `./install` + `./compile` inside the clone guard means re-run won't recover
+`bootstrap_vps.sh` should be folded to do this BEFORE `./install` to make
+the first-run clean. Currently the manual recovery covers it.
 
-Current step 3b:
+### 2. `bootstrap_vps.sh` step 3b is not idempotent on partial failure
 
-```bash
-if [ ! -d hummingbot ]; then
-  git clone ...
-  cd hummingbot
-  ./install
-  ./compile
-fi
+`if [ ! -d hummingbot ]; then ... ./install ./compile ... fi` — if install
+or compile fails after the clone succeeds, re-running bootstrap SKIPS the
+recovery. Operator must run `deploy/_recovery.sh` or do it manually.
+
+**Fix:** factor `./install` and `./compile` out of the clone guard with
+sentinel files (e.g. `~/hummingbot/.install.ok`, `.compile.ok`).
+
+### 3. Hummingbot V2 strategy launch needs an outer config in `conf/scripts/`
+
+Our controller config in `conf/controllers/factor_mm_btc.yml` is loaded by
+the wrapper `scripts/v2_with_controllers.py`. That wrapper needs a config
+in `conf/scripts/`. We now ship `conf/scripts/factor_mm.yml` referencing
+the controller.
+
+systemd unit launches:
+`hummingbot_quickstart.py --v2 factor_mm.yml --headless`
+
+(The earlier `-f conf/controllers/factor_mm_btc.yml` approach does not
+work for the V2 Controller framework.)
+
+### 4. `MarketMakingControllerConfigBase` requires an `id` field
+
+Added `id: factor_mm_btc_perp_v1` to the example YAML. Spec §4.2 model
+listing missed this. Updates to spec §11 V1 should reflect this.
+
+### 5. `MarketMakingControllerConfigBase.candles_config` / `markets` rejected
+
+V2WithControllersConfig in current Hummingbot uses pydantic v2 with
+`extra="forbid"`, so the older `candles_config: []` and `markets: {}`
+fields from spec §11 V1 examples must be omitted from the outer config.
+(They live inside `StrategyV2ConfigBase` but the V2WithControllers
+subclass overrides with stricter validation.)
+
+### 6. Binance Futures BTC-USDT min notional = 50 USDT
+
+`total_amount_quote: 200` produced per-order notional ≈ $45 → orders
+rejected by Binance API. Bumped default to `500` (each order ≈ $125).
+Worth documenting this constraint in the spec parameter table.
+
+### 7. `OrderBook` exposes data via `bid_entries()` / `ask_entries()`, not `.bids` / `.asks`
+
+This was V8 in spec §11. Confirmed during M4. Controller's
+`_build_snapshot` now uses iterators:
+
+```python
+best_bid = next(iter(ob.bid_entries()))
+best_ask = next(iter(ob.ask_entries()))
 ```
 
-If `./install` or `./compile` fails after the clone succeeds, re-running
-`bootstrap_vps.sh` SKIPS the install/compile (because `~/hummingbot` exists).
-Operator must recover manually.
+### 8. Streamlit needs `PYTHONPATH=/home/botuser/factor-mm` and `streamlit pandas plotly` deps
 
-**Fix:** factor install/compile out of the clone guard and add their own
-sentinel files (e.g. `~/hummingbot/.install.ok`, `~/hummingbot/.compile.ok`)
-so each step is independently idempotent.
+Hummingbot conda env doesn't include streamlit/pandas/plotly. Installed via
+`pip install streamlit pandas plotly` inside the env at M4.
 
-### Issue 3 — README symlink list is stale
+`bootstrap_vps.sh` should run this pip install before enabling the
+dashboard service. Also systemd dashboard unit now sets
+`Environment=PYTHONPATH=/home/botuser/factor-mm` so `from dashboard.queries
+import ...` resolves.
 
-The README's first-run runbook lists 5 controller files to be symlinked.
-After 2026-06-19 we have 6 (added `exchange_time.py`). Bootstrap was
-patched to loop over `*.py` (commit 7e0b500) — README runbook should
-match the loop wording.
+### 9. `--config-password=$VAR` on systemd ExecStart leaks the password
+
+`systemd` expands `${VAR}` in ExecStart at unit-load time, and the
+resulting argv is visible in `/proc/<pid>/cmdline`, `systemctl status`,
+and `journalctl`. Replaced with a wrapper script (`deploy/run-hummingbot.sh`)
+that reads `HUMMINGBOT_PASSWORD` from env and injects it into Python's
+`sys.argv` AFTER process start (in-process memory only, not visible to
+other processes via /proc).
+
+### 10. Dashboard binds 0.0.0.0 + `ufw allow in on tailscale0`
+
+Public 8501 stays blocked by ufw default-deny (only 22/tcp allowed from
+public). Tailscale interface explicitly allowed via:
+`ufw allow in on tailscale0`
+
+Browser access: `http://<tailscale-ip>:8501` (Tailscale-only).

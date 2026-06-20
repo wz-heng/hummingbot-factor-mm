@@ -1,0 +1,5 @@
+script_file_name: v2_with_controllers.py
+controllers_config:
+  - factor_mm_btc.yml
+max_global_drawdown_quote:
+max_controller_drawdown_quote:

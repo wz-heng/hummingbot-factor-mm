@@ -3,6 +3,7 @@
 # Copy this file to factor_mm_btc.yml (which is gitignored) and edit the
 # numbers if you need to. The defaults match the spec §6.6 risk table.
 
+id: factor_mm_btc_perp_v1
 controller_name: factor_mm_btc_perp
 controller_type: market_making
 manual_kill_switch: false
@@ -12,7 +13,9 @@ connector_name: binance_perpetual_testnet
 trading_pair: BTC-USDT
 leverage: 5
 position_mode: ONEWAY
-total_amount_quote: 200       # USDT notional total
+# Binance Futures BTC-USDT min notional is 50 USDT per order; with 4 orders
+# (2 levels × 2 sides) and equal split, each gets total / 4 = ~125 USDT — well above min.
+total_amount_quote: 500       # USDT notional total
 
 # Quoting (base class)
 buy_spreads:   [0.0005, 0.0010]    # 5 bp, 10 bp
