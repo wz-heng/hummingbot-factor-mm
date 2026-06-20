@@ -41,59 +41,99 @@ _PRICE_AMOUNT_SCALE = 1_000_000  # Hummingbot TradeFill stores price/amount as i
 
 
 def load_pnl_summary(db_path: Union[str, Path]) -> dict:
-    """Cumulative + today PnL aggregated from the Executors table.
+    """Cumulative + today PnL computed directly from TradeFill (ground truth).
 
-    `Executors` is Hummingbot's per-PositionExecutor record with floats
-    `net_pnl_quote`, `cum_fees_quote`, `filled_amount_quote` already in
-    quote-currency units. Each closed executor represents one open→close
-    position cycle.
+    TradeFill records every actual exchange fill (price, amount, fee). We
+    sum the quote-currency cash flow:
+      - BUY  → cash out  = -(price * amount) - fees
+      - SELL → cash in   = +(price * amount) - fees
+    realized_pnl = sum(cash flow)  (correct if net position ≈ 0)
+
+    If the bot ends with non-zero net base, the unrealized P/L for that
+    position is NOT included here — the caller can add it from the current
+    mid + remaining_base.
+
+    Also returns an Executors-table breakdown by close_type for the
+    decomposition table; if Executors lag behind TradeFill (we have
+    observed Hummingbot's V2 PositionExecutor stop writing new rows while
+    the controller keeps trading), the realized PnL above is still
+    correct because it comes from TradeFill.
 
     "Today" is reckoned in local time, midnight-to-midnight.
-
-    Returns a dict with zeros if the table is missing (early bring-up).
     """
     import datetime as _dt
 
-    today_start_ts = _dt.datetime.combine(_dt.date.today(), _dt.time()).timestamp()
+    today_start_ms = int(
+        _dt.datetime.combine(_dt.date.today(), _dt.time()).timestamp() * 1000
+    )
+
+    def _pnl_query(conn, where: str = "1=1", params: tuple = ()) -> tuple:
+        """Return (n_fills, realized_pnl_quote, total_fees_quote, total_notional_quote)."""
+        row = conn.execute(
+            f"""
+            SELECT
+                count(*),
+                coalesce(
+                    sum(
+                        CASE WHEN trade_type='SELL' THEN  amount * price / 1e12
+                                                   ELSE -amount * price / 1e12
+                        END
+                    ),
+                    0
+                ),
+                coalesce(sum(trade_fee_in_quote / 1e6), 0),
+                coalesce(sum(amount * price / 1e12), 0)
+            FROM TradeFill
+            WHERE {where}
+            """,
+            params,
+        ).fetchone()
+        # realized = cash flow - fees
+        return row[0], float(row[1]) - float(row[2]), float(row[2]), float(row[3])
 
     with sqlite3.connect(str(db_path)) as conn:
         try:
-            tot = conn.execute(
-                "SELECT count(*), "
-                "       coalesce(sum(net_pnl_quote), 0), "
-                "       coalesce(sum(cum_fees_quote), 0), "
-                "       coalesce(sum(filled_amount_quote), 0) "
-                "FROM Executors"
-            ).fetchone()
-            today = conn.execute(
-                "SELECT count(*), coalesce(sum(net_pnl_quote), 0) "
-                "FROM Executors "
-                "WHERE close_timestamp >= ?",
-                (today_start_ts,),
-            ).fetchone()
-            by_type = conn.execute(
-                "SELECT close_type, count(*), coalesce(sum(net_pnl_quote), 0) "
-                "FROM Executors WHERE is_active = 0 "
-                "GROUP BY close_type ORDER BY count(*) DESC"
-            ).fetchall()
+            n_total, total_pnl, total_fees, total_notional = _pnl_query(conn)
+            n_today, today_pnl, _, _ = _pnl_query(
+                conn, "timestamp >= ?", (today_start_ms,)
+            )
+            # Executors breakdown (may lag — for decomposition view only)
+            by_type = []
+            try:
+                by_type = conn.execute(
+                    "SELECT close_type, count(*), coalesce(sum(net_pnl_quote), 0) "
+                    "FROM Executors WHERE is_active = 0 "
+                    "GROUP BY close_type ORDER BY count(*) DESC"
+                ).fetchall()
+            except sqlite3.OperationalError:
+                pass
+            n_executors = 0
+            try:
+                n_executors = conn.execute(
+                    "SELECT count(*) FROM Executors"
+                ).fetchone()[0]
+            except sqlite3.OperationalError:
+                pass
         except sqlite3.OperationalError:
             return {
                 "total_pnl": 0.0,
                 "total_fees": 0.0,
                 "total_notional": 0.0,
-                "n_executors": 0,
+                "n_fills": 0,
                 "today_pnl": 0.0,
-                "today_n": 0,
+                "today_n_fills": 0,
+                "n_executors": 0,
                 "by_close_type": [],
             }
 
     return {
-        "n_executors": tot[0],
-        "total_pnl": float(tot[1]),
-        "total_fees": float(tot[2]),
-        "total_notional": float(tot[3]),
-        "today_n": today[0],
-        "today_pnl": float(today[1]),
+        "n_fills": n_total,
+        "total_pnl": total_pnl,
+        "total_fees": total_fees,
+        "total_notional": total_notional,
+        "today_n_fills": n_today,
+        "today_pnl": today_pnl,
+        "n_executors": n_executors,
         "by_close_type": [(r[0], r[1], float(r[2])) for r in by_type],
     }
 

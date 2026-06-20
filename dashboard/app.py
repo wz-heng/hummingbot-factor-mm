@@ -49,7 +49,7 @@ st.markdown(
 # PnL row (from Hummingbot's Executors table)
 pnl = load_pnl_summary(TRADES_DB) if TRADES_DB.exists() else None
 pcols = st.columns(4)
-if pnl and pnl["n_executors"] > 0:
+if pnl and pnl["n_fills"] > 0:
     pcols[0].metric(
         "Cumulative PnL (USDT)",
         f"{pnl['total_pnl']:+.2f}",
@@ -58,12 +58,12 @@ if pnl and pnl["n_executors"] > 0:
     pcols[1].metric(
         "Today's PnL (USDT)",
         f"{pnl['today_pnl']:+.2f}",
-        delta=f"{pnl['today_n']} executors closed",
+        delta=f"{pnl['today_n_fills']} fills today",
     )
     pcols[2].metric("Cumulative Fees (USDT)", f"{pnl['total_fees']:.2f}")
     pcols[3].metric(
-        "Executors (closed)",
-        f"{pnl['n_executors']}",
+        "Fills (all-time)",
+        f"{pnl['n_fills']}",
         delta=f"notional {pnl['total_notional']/1000:.1f}k USDT",
     )
 else:
