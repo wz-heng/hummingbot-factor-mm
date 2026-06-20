@@ -41,25 +41,31 @@ _PRICE_AMOUNT_SCALE = 1_000_000  # Hummingbot TradeFill stores price/amount as i
 
 
 def load_pnl_summary(db_path: Union[str, Path]) -> dict:
-    """Cumulative + today PnL computed directly from TradeFill (ground truth).
+    """Cumulative PnL with MTM of any open inventory (ground truth).
 
-    TradeFill records every actual exchange fill (price, amount, fee). We
-    sum the quote-currency cash flow:
-      - BUY  → cash out  = -(price * amount) - fees
-      - SELL → cash in   = +(price * amount) - fees
-    realized_pnl = sum(cash flow)  (correct if net position ≈ 0)
+    Pure realized cash flow (sum SELL - sum BUY - fees) **jumps by ~one
+    order's notional on every fill** because the bot is constantly mid-
+    cycle: after a BUY but before its paired SELL, realized cash flow is
+    ~-$120 even though the bot is holding $120 of BTC (worth ~$120).
+    That made the cumulative-PnL Big Number swing ±$200 between
+    consecutive fills.
 
-    If the bot ends with non-zero net base, the unrealized P/L for that
-    position is NOT included here — the caller can add it from the current
-    mid + remaining_base.
+    Correct accounting:
+        PnL = (sum SELL value) - (sum BUY value)
+              + (net_base × current_mid)   ← mark-to-market of open inventory
+              - sum(fees)
 
-    Also returns an Executors-table breakdown by close_type for the
-    decomposition table; if Executors lag behind TradeFill (we have
-    observed Hummingbot's V2 PositionExecutor stop writing new rows while
-    the controller keeps trading), the realized PnL above is still
-    correct because it comes from TradeFill.
+    `current_mid` is approximated by the most recent fill's price. For a
+    market-making bot quoting ±5-10 bp around mid, this is accurate to
+    well under a basis point — far below normal PnL motion.
 
-    "Today" is reckoned in local time, midnight-to-midnight.
+    Caveats:
+      - For "today's PnL" we still report realized cash flow only (the
+        MTM correction is a stock, not a flow, so splitting by day is
+        awkward). It's labelled "today fills realized" in the dashboard.
+      - by_close_type still reads Executors for the decomposition view;
+        if Executors lags TradeFill (observed M4 behaviour), the
+        breakdown is informational.
     """
     import datetime as _dt
 
@@ -67,37 +73,53 @@ def load_pnl_summary(db_path: Union[str, Path]) -> dict:
         _dt.datetime.combine(_dt.date.today(), _dt.time()).timestamp() * 1000
     )
 
-    def _pnl_query(conn, where: str = "1=1", params: tuple = ()) -> tuple:
-        """Return (n_fills, realized_pnl_quote, total_fees_quote, total_notional_quote)."""
-        row = conn.execute(
-            f"""
-            SELECT
-                count(*),
-                coalesce(
-                    sum(
-                        CASE WHEN trade_type='SELL' THEN  amount * price / 1e12
-                                                   ELSE -amount * price / 1e12
-                        END
-                    ),
-                    0
-                ),
-                coalesce(sum(trade_fee_in_quote / 1e6), 0),
-                coalesce(sum(amount * price / 1e12), 0)
-            FROM TradeFill
-            WHERE {where}
-            """,
-            params,
-        ).fetchone()
-        # realized = cash flow - fees
-        return row[0], float(row[1]) - float(row[2]), float(row[2]), float(row[3])
-
     with sqlite3.connect(str(db_path)) as conn:
         try:
-            n_total, total_pnl, total_fees, total_notional = _pnl_query(conn)
-            n_today, today_pnl, _, _ = _pnl_query(
-                conn, "timestamp >= ?", (today_start_ms,)
-            )
-            # Executors breakdown (may lag — for decomposition view only)
+            row = conn.execute(
+                """
+                SELECT
+                    count(*),
+                    coalesce(sum(CASE WHEN trade_type='SELL' THEN amount*price/1e12 ELSE 0 END), 0) AS sell_value,
+                    coalesce(sum(CASE WHEN trade_type='BUY'  THEN amount*price/1e12 ELSE 0 END), 0) AS buy_value,
+                    coalesce(sum(CASE WHEN trade_type='SELL' THEN amount/1e6        ELSE 0 END), 0) AS sell_qty,
+                    coalesce(sum(CASE WHEN trade_type='BUY'  THEN amount/1e6        ELSE 0 END), 0) AS buy_qty,
+                    coalesce(sum(trade_fee_in_quote/1e6), 0) AS fees
+                FROM TradeFill
+                """
+            ).fetchone()
+            n_total = row[0]
+            sell_value = float(row[1])
+            buy_value = float(row[2])
+            sell_qty = float(row[3])
+            buy_qty = float(row[4])
+            total_fees = float(row[5])
+
+            net_base = buy_qty - sell_qty  # positive = net long
+            total_notional = buy_value + sell_value
+
+            last_price_row = conn.execute(
+                "SELECT price/1e6 FROM TradeFill ORDER BY timestamp DESC LIMIT 1"
+            ).fetchone()
+            current_mid = float(last_price_row[0]) if last_price_row else 0.0
+
+            mtm_value = net_base * current_mid
+            realized_cash_flow = sell_value - buy_value
+            total_pnl = realized_cash_flow + mtm_value - total_fees
+
+            today_row = conn.execute(
+                """
+                SELECT
+                    count(*),
+                    coalesce(sum(CASE WHEN trade_type='SELL' THEN amount*price/1e12 ELSE 0 END), 0)
+                  - coalesce(sum(CASE WHEN trade_type='BUY'  THEN amount*price/1e12 ELSE 0 END), 0)
+                  - coalesce(sum(trade_fee_in_quote/1e6), 0)
+                FROM TradeFill WHERE timestamp >= ?
+                """,
+                (today_start_ms,),
+            ).fetchone()
+            today_n = today_row[0]
+            today_realized = float(today_row[1])
+
             by_type = []
             try:
                 by_type = conn.execute(
@@ -123,16 +145,24 @@ def load_pnl_summary(db_path: Union[str, Path]) -> dict:
                 "today_pnl": 0.0,
                 "today_n_fills": 0,
                 "n_executors": 0,
+                "current_net_base": 0.0,
+                "current_mid": 0.0,
+                "mtm_value": 0.0,
+                "realized_cash_flow": 0.0,
                 "by_close_type": [],
             }
 
     return {
         "n_fills": n_total,
         "total_pnl": total_pnl,
+        "realized_cash_flow": realized_cash_flow,
+        "mtm_value": mtm_value,
+        "current_net_base": net_base,
+        "current_mid": current_mid,
         "total_fees": total_fees,
         "total_notional": total_notional,
-        "today_n_fills": n_today,
-        "today_pnl": today_pnl,
+        "today_n_fills": today_n,
+        "today_pnl": today_realized,  # realized only, no MTM by design
         "n_executors": n_executors,
         "by_close_type": [(r[0], r[1], float(r[2])) for r in by_type],
     }

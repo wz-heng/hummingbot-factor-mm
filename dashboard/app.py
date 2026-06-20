@@ -51,14 +51,22 @@ pnl = load_pnl_summary(TRADES_DB) if TRADES_DB.exists() else None
 pcols = st.columns(4)
 if pnl and pnl["n_fills"] > 0:
     pcols[0].metric(
-        "Cumulative PnL (USDT)",
+        "PnL (USDT, with MTM)",
         f"{pnl['total_pnl']:+.2f}",
         delta=f"{pnl['total_pnl'] / max(pnl['total_notional'], 1) * 10000:+.1f} bp of notional",
+        help=(
+            "Realized cash flow + MTM of open inventory − fees. "
+            f"Realized={pnl['realized_cash_flow']:+.2f}, "
+            f"MTM={pnl['mtm_value']:+.2f} "
+            f"(net_base={pnl['current_net_base']:+.5f} × {pnl['current_mid']:.2f}), "
+            f"fees={pnl['total_fees']:.2f}."
+        ),
     )
     pcols[1].metric(
-        "Today's PnL (USDT)",
+        "Today fills (realized)",
         f"{pnl['today_pnl']:+.2f}",
         delta=f"{pnl['today_n_fills']} fills today",
+        help="Realized cash flow from today's fills only; does NOT include MTM (splitting MTM by day is ambiguous).",
     )
     pcols[2].metric("Cumulative Fees (USDT)", f"{pnl['total_fees']:.2f}")
     pcols[3].metric(
