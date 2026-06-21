@@ -95,7 +95,13 @@ else:
 df = load_metrics(METRICS_DB, window_sec=WINDOW_SEC) if METRICS_DB.exists() else pd.DataFrame()
 
 if not df.empty:
-    df["t"] = pd.to_datetime(df["ts"], unit="ms")
+    # Display chart x-axis in Asia/Shanghai (CST, UTC+8) to match operator's
+    # wall clock. VPS runs in UTC; tz-aware datetimes let Plotly render
+    # the right local labels.
+    df["t"] = (
+        pd.to_datetime(df["ts"], unit="ms", utc=True)
+        .dt.tz_convert("Asia/Shanghai")
+    )
 
     # Row 1: factor signals
     fig1 = make_subplots(specs=[[{"secondary_y": True}]])
