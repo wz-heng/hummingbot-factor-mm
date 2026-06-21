@@ -137,6 +137,36 @@ False alarm guidance: if Executors looks stuck but the bot is still
 trading via journal + TradeFill, wait 5 minutes and re-query before
 diagnosing a bug.
 
+### 12.7 MarketMakingControllerBase.get_current_base_position is SPOT-only
+
+The method iterates `self.positions_held` which is a spot-trading
+concept. For perpetual connectors it always returns 0 (Hummingbot
+explicitly skips spot-style position rebalancing for perps via
+`check_position_rebalance`'s first line:
+`if "_perpetual" in self.config.connector_name: return None`).
+
+Symptom we observed: `metrics.net_base` was 0.0 for 16+ hours of
+testnet running despite TradeFill cumulative net = +0.0029 BTC.
+inv_skew silently stayed at 0 → inventory management was OFF.
+
+Fix: read derivative position from the connector directly:
+
+```python
+def _get_perp_position(self) -> Decimal:
+    conn = self.market_data_provider.connectors[self.config.connector_name]
+    total = Decimal("0")
+    for pos in conn.account_positions.values():
+        if pos.trading_pair == self.config.trading_pair:
+            total += Decimal(str(pos.amount))  # signed
+    return total
+```
+
+`Position.amount` is signed (+ long / - short). For HEDGE mode there
+are two entries per pair (LONG + SHORT); summing handles both modes.
+
+Spec §11 V1 needs an annotation that `get_current_base_position` is
+unreliable on perp; spec §4.4 D3 may need a reword.
+
 ### 13. TradeFill schema columns and scaling differ from naive expectation
 
 Actual columns:

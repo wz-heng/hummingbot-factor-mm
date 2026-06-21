@@ -166,7 +166,7 @@ class FactorMMBtcPerp(MarketMakingControllerBase):
             bid_qty=bid_qty,
             ask_px=ask_px,
             ask_qty=ask_qty,
-            net_base=Decimal(str(self.get_current_base_position())),
+            net_base=self._get_perp_position(),
             daily_pnl=self._read_daily_pnl(),
             snapshot_ts_sec=float(snapshot_ts),
             now_sec=now,
@@ -191,6 +191,31 @@ class FactorMMBtcPerp(MarketMakingControllerBase):
     def _read_daily_pnl(self) -> Decimal:
         # M4 will wire this to Hummingbot trades.sqlite; until then return 0
         return Decimal("0")
+
+    def _get_perp_position(self) -> Decimal:
+        """Return signed net base position on this perpetual.
+
+        The base class's get_current_base_position() iterates over
+        self.positions_held — a SPOT concept. For perpetual contracts,
+        positions_held is always empty (Hummingbot explicitly skips
+        spot-style rebalancing for perps in check_position_rebalance).
+
+        The real derivative position lives on the connector:
+        connector.account_positions is Dict[str, Position]. We sum
+        amount over all entries matching our trading_pair (handles
+        both ONEWAY — one entry — and HEDGE — LONG + SHORT entries).
+        Position.amount is signed: positive = long, negative = short.
+        """
+        try:
+            conn = self.market_data_provider.connectors[self.config.connector_name]
+            total = Decimal("0")
+            for pos in conn.account_positions.values():
+                if pos.trading_pair == self.config.trading_pair:
+                    total += Decimal(str(pos.amount))
+            return total
+        except Exception as exc:
+            self.logger().warning(f"_get_perp_position: read failed: {exc}")
+            return Decimal("0")
 
     def _emit_metrics(self, snap, params, result, now: float) -> None:
         mid = (snap.bid_px + snap.ask_px) / 2
