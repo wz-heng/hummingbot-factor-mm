@@ -19,7 +19,7 @@ TRADES_DB=/home/botuser/hummingbot/data/factor_mm.sqlite
 METRICS_DB=/home/botuser/hummingbot/data/factor_metrics.sqlite
 
 echo "================================================================="
-echo "  Factor MM · M6 Daily Status  ·  $(date '+%Y-%m-%d %H:%M:%S %Z')"
+echo "  Factor MM · M6 Daily Status  ·  $(TZ='Asia/Shanghai' date '+%Y-%m-%d %H:%M:%S %Z')"
 echo "================================================================="
 
 echo
@@ -121,7 +121,7 @@ for r in c.execute("""
     SELECT timestamp, trade_type, order_type, position, price, amount
     FROM TradeFill ORDER BY timestamp DESC LIMIT 5
 """).fetchall():
-    t = datetime.datetime.fromtimestamp(r[0]/1000).strftime('%m-%d %H:%M:%S')
+    t = datetime.datetime.fromtimestamp(r[0]/1000, tz=datetime.timezone.utc).astimezone(datetime.timezone(datetime.timedelta(hours=8))).strftime('%m-%d %H:%M:%S')
     print(f"  {t}  {r[1]:5s} {r[2]:7s} {r[3]:5s}  px {r[4]/1e6:9.2f}  qty {r[5]/1e6:7.5f}")
 PY
 

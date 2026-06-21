@@ -210,7 +210,14 @@ def load_recent_fills(
         if not df.empty:
             df["price"] = df["price"] / _PRICE_AMOUNT_SCALE
             df["amount"] = df["amount"] / _PRICE_AMOUNT_SCALE
-            df["time"] = pd.to_datetime(df["timestamp"], unit="ms")
+            # Show times in Asia/Shanghai (CST, UTC+8) so they match the operator's
+            # wall clock. VPS runs in UTC; without conversion, "10:41" displayed
+            # actually means "18:41" Beijing time — confusing.
+            df["time"] = (
+                pd.to_datetime(df["timestamp"], unit="ms", utc=True)
+                .dt.tz_convert("Asia/Shanghai")
+                .dt.strftime("%m-%d %H:%M:%S")
+            )
             df = df[["time", "trading_pair", "trade_type", "order_type",
                      "position", "price", "amount"]]
         return df
