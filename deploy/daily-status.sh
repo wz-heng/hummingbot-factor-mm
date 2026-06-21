@@ -29,26 +29,41 @@ echo "uptime: $(systemctl show hummingbot -p ActiveEnterTimestamp --value)"
 echo "restarts since boot: $(systemctl show hummingbot -p NRestarts --value)"
 
 echo
-echo "--- PnL summary (from TradeFill — ground truth) ---"
+echo "--- PnL summary (TradeFill + MTM of open inventory — matches dashboard) ---"
 sudo -u botuser "$PY" - "$TRADES_DB" <<'PY'
 import sqlite3, sys, datetime
 db = sys.argv[1]
 c = sqlite3.connect(db)
 today_ms = int(datetime.datetime.combine(datetime.date.today(), datetime.time()).timestamp() * 1000)
-def q(where, params=()):
+
+def agg(where, params=()):
+    """Returns (n_fills, sell_value, buy_value, sell_qty, buy_qty, fees)."""
     return c.execute(f"""
         SELECT count(*),
-               coalesce(sum(CASE WHEN trade_type='SELL' THEN amount*price/1e12
-                                                       ELSE -amount*price/1e12 END), 0)
-               - coalesce(sum(trade_fee_in_quote/1e6), 0),
-               coalesce(sum(trade_fee_in_quote/1e6), 0),
-               coalesce(sum(amount*price/1e12), 0)
+               coalesce(sum(CASE WHEN trade_type='SELL' THEN amount*price/1e12 ELSE 0 END), 0),
+               coalesce(sum(CASE WHEN trade_type='BUY'  THEN amount*price/1e12 ELSE 0 END), 0),
+               coalesce(sum(CASE WHEN trade_type='SELL' THEN amount/1e6        ELSE 0 END), 0),
+               coalesce(sum(CASE WHEN trade_type='BUY'  THEN amount/1e6        ELSE 0 END), 0),
+               coalesce(sum(trade_fee_in_quote/1e6), 0)
         FROM TradeFill WHERE {where}
     """, params).fetchone()
-all_n, all_pnl, all_fees, all_notional = q("1=1")
-tod_n, tod_pnl, tod_fees, tod_notional = q("timestamp >= ?", (today_ms,))
-print(f"  Cumulative:  {all_n:6d} fills  ·  PnL {all_pnl:+8.2f} USDT  ·  fees {all_fees:7.2f}  ·  notional {all_notional:10.1f}")
-print(f"  Today:       {tod_n:6d} fills  ·  PnL {tod_pnl:+8.2f} USDT  ·  fees {tod_fees:7.2f}  ·  notional {tod_notional:10.1f}")
+
+n_all, sv_all, bv_all, sq_all, bq_all, fees_all = agg("1=1")
+net_base = bq_all - sq_all
+last_px_row = c.execute("SELECT price/1e6 FROM TradeFill ORDER BY timestamp DESC LIMIT 1").fetchone()
+last_px = float(last_px_row[0]) if last_px_row else 0.0
+mtm = net_base * last_px
+realized = sv_all - bv_all
+total_pnl = realized + mtm - fees_all
+notional_all = sv_all + bv_all
+
+n_tod, sv_tod, bv_tod, _, _, fees_tod = agg("timestamp >= ?", (today_ms,))
+today_realized = sv_tod - bv_tod - fees_tod
+
+print(f"  Cumulative (with MTM):  PnL {total_pnl:+8.2f} USDT  =  realized {realized:+.2f}  +  MTM {mtm:+.2f}  -  fees {fees_all:.2f}")
+print(f"  Open inventory:         {net_base:+.6f} BTC × {last_px:.2f}  =  {mtm:+.2f} USDT (MTM)")
+print(f"  Cumulative fills:       {n_all}  ·  notional {notional_all:.0f} USDT")
+print(f"  Today fills (realized): PnL {today_realized:+8.2f} USDT  ·  {n_tod} fills  (MTM not split by day)")
 PY
 
 echo

@@ -108,7 +108,36 @@ sqlite filename. For our setup that's `factor_mm.sqlite` (from
 default `trades.sqlite`. Fixed `TRADES_DB` env in
 `deploy/factor-dashboard.service`.
 
-### 12. TradeFill schema columns and scaling differ from naive expectation
+### 12.5 PnL must include MTM of open inventory (or jumps ~one fill notional)
+
+A naive `sum(SELL) - sum(BUY) - fees` formula jumps by ~one order's
+notional (\$120 in our V1) on every fill because the bot is always
+mid-cycle (holding small inventory between an entry fill and its
+paired exit). Correct formula:
+
+    PnL = realized_cash_flow + (net_base × current_mid) - fees
+
+where current_mid ≈ last fill price for testnet-grade accuracy.
+
+`dashboard/queries.py::load_pnl_summary` and
+`deploy/daily-status.sh` both use this formula. Cross-validated
+against Hummingbot's `Executors.net_pnl_quote` aggregation — they
+agree within a few USDT (timing differences only).
+
+### 12.6 Hummingbot Markets recorder commits SQLite writes in batches
+
+Reading `Executors` table from an external connection in the
+middle of a write batch shows stale data (latest rows missing
+until next commit). `journal_mode=delete` (default) means readers
+see only committed data; Hummingbot batches commits — `max(timestamp)`
+on `Executors` can lag the actual latest-created executor by several
+minutes during heavy trading.
+
+False alarm guidance: if Executors looks stuck but the bot is still
+trading via journal + TradeFill, wait 5 minutes and re-query before
+diagnosing a bug.
+
+### 13. TradeFill schema columns and scaling differ from naive expectation
 
 Actual columns:
 `config_file_path, strategy, market, symbol, base_asset, quote_asset,
