@@ -34,7 +34,7 @@ time_limit:  300
 obi_weight:             0.5
 factor_scale_bps:       2
 inventory_target:       0
-inventory_penalty_bps:  300
+inventory_penalty_bps:  100   # M7 调参 2026-06-24: 300 太激进导致过度交易,改 100 试试
 inventory_soft_cap:     0.01
 inventory_hard_cap:     0.02
 
