@@ -18,8 +18,8 @@ position_mode: ONEWAY
 total_amount_quote: 500       # USDT notional total
 
 # Quoting (base class)
-buy_spreads:   [0.0005, 0.0010]    # 5 bp, 10 bp
-sell_spreads:  [0.0005, 0.0010]
+buy_spreads:   [0.0010, 0.0020]    # M7 2026-06-25: 5/10 bp → 10/20 bp (减少 adverse selection)
+sell_spreads:  [0.0010, 0.0020]
 buy_amounts_pct:  [0.5, 0.5]
 sell_amounts_pct: [0.5, 0.5]
 executor_refresh_time: 60
@@ -34,7 +34,7 @@ time_limit:  300
 obi_weight:             0.5
 factor_scale_bps:       2
 inventory_target:       0
-inventory_penalty_bps:  0     # M7 ablation 2026-06-24 20:30: 关 inv_skew,纯 factor 模式,看是不是 inv_skew 整体拖后腿
+inventory_penalty_bps:  100   # M7 2026-06-25 (回到 100,配合 spreads ×2)
 inventory_soft_cap:     0.01
 inventory_hard_cap:     0.02
 
