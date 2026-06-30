@@ -35,10 +35,16 @@ from controllers.market_making.exchange_time import (
     estimate_exchange_time_sec,
     fetch_binance_futures_server_time_sec,
 )
+from controllers.market_making.exchange_health import (
+    count_recent_order_failures,
+    evaluate_exchange_health,
+)
 
 
 # Where to write factor_metrics.sqlite (relative to Hummingbot working dir, i.e., /home/botuser/hummingbot)
 _METRICS_DB_PATH = Path("data") / "factor_metrics.sqlite"
+# Hummingbot's recorder writes Order/TradeFill here (named after controller config).
+_TRADES_DB_PATH = Path("data") / "factor_mm.sqlite"
 
 
 class FactorMMConfig(MarketMakingControllerConfigBase):
@@ -60,6 +66,11 @@ class FactorMMConfig(MarketMakingControllerConfigBase):
     max_orderbook_age_sec: float = Field(default=2.0)
     max_clock_drift_sec: float = Field(default=0.5)
 
+    # Exchange health (added 2026-06-30 after Binance Testnet 5h outage)
+    exchange_failure_threshold: int = Field(default=20)             # failures in window → halt
+    exchange_failure_window_sec: float = Field(default=300.0)       # 5 min lookback
+    exchange_recovery_window_sec: float = Field(default=300.0)      # 5 min no failures → recover
+
 
 class FactorMMBtcPerp(MarketMakingControllerBase):
     """Thin adapter from Hummingbot v2 controller surface to compute_processed_data."""
@@ -80,12 +91,20 @@ class FactorMMBtcPerp(MarketMakingControllerBase):
             if config.connector_name.endswith("_testnet")
             else BINANCE_FUTURES_MAINNET_TIME_URL
         )
+        # Exchange health gate state (recomputed every 30s, not every tick)
+        self._exchange_halted: bool = False
+        self._exch_health_last_check: float = 0.0
+        self._exch_health_cached_failures: int = 0
+        self._exch_health_last_failure_ts: float = 0.0
 
     # ------------------------------------------------------------------
     async def update_processed_data(self) -> None:
         snap = self._build_snapshot()
         params = self._build_params()
         result = compute_processed_data(snap, params)
+
+        # Exchange health gate (independent of compute_processed_data)
+        self._refresh_exchange_health()
 
         if result["halt_reason"] == "daily_loss":
             if not self._kill_switch_engaged:
@@ -96,6 +115,12 @@ class FactorMMBtcPerp(MarketMakingControllerBase):
             self._kill_switch_engaged = True
         elif result["halt_reason"] is not None:
             self.logger().warning(f"Halting tick: {result['halt_reason']}")
+
+        # If exchange health gate fires, override to halt regardless of factor result
+        if self._exchange_halted:
+            result = dict(result)
+            result["spread_multiplier"] = Decimal("0")
+            result["halt_reason"] = "exchange_failures"
 
         self.processed_data = {
             "reference_price": result["reference_price"],
@@ -191,6 +216,59 @@ class FactorMMBtcPerp(MarketMakingControllerBase):
     def _read_daily_pnl(self) -> Decimal:
         # M4 will wire this to Hummingbot trades.sqlite; until then return 0
         return Decimal("0")
+
+    def _refresh_exchange_health(self) -> None:
+        """Update self._exchange_halted based on recent Order failures.
+
+        sqlite query throttled to once per 30s — running it every tick
+        would pointlessly contend with Hummingbot's recorder.
+        """
+        now = time.time()
+        if now - self._exch_health_last_check < 30.0:
+            # Use cached state but still let recovery logic fire on every check
+            halted, _ = evaluate_exchange_health(
+                n_recent_failures=self._exch_health_cached_failures,
+                last_failure_ts_sec=self._exch_health_last_failure_ts,
+                now_sec=now,
+                halted_state=self._exchange_halted,
+                threshold=self.config.exchange_failure_threshold,
+                recovery_window_sec=self.config.exchange_recovery_window_sec,
+            )
+            if halted != self._exchange_halted and not halted:
+                self.logger().info(
+                    "EXCHANGE RECOVERY: no failures within window — resuming"
+                )
+            self._exchange_halted = halted
+            return
+
+        self._exch_health_last_check = now
+        cutoff_ms = int(
+            (now - self.config.exchange_failure_window_sec) * 1000
+        )
+        n, last_ts = count_recent_order_failures(_TRADES_DB_PATH, cutoff_ms)
+        self._exch_health_cached_failures = n
+        if last_ts > 0:
+            self._exch_health_last_failure_ts = last_ts
+
+        previous = self._exchange_halted
+        halted, _ = evaluate_exchange_health(
+            n_recent_failures=n,
+            last_failure_ts_sec=self._exch_health_last_failure_ts,
+            now_sec=now,
+            halted_state=previous,
+            threshold=self.config.exchange_failure_threshold,
+            recovery_window_sec=self.config.exchange_recovery_window_sec,
+        )
+        if halted and not previous:
+            self.logger().critical(
+                f"EXCHANGE HALT: {n} order failures in last "
+                f"{int(self.config.exchange_failure_window_sec)}s — pausing quotes"
+            )
+        elif previous and not halted:
+            self.logger().info(
+                "EXCHANGE RECOVERY: no failures within window — resuming"
+            )
+        self._exchange_halted = halted
 
     def _get_perp_position(self) -> Decimal:
         """Return signed net base position on this perpetual.
